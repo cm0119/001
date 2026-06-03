@@ -1,3 +1,8 @@
+"""
+无人机心跳监测可视化系统
+基于Streamlit实现实时心跳监控和掉线报警
+整合心跳模拟器和Web界面
+"""
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
