@@ -149,9 +149,9 @@ if st.session_state.received_heartbeats:
         height=400
     ).interactive()
     
-    st.altair_chart(chart, use_container_width=True)
-    
-    # 显示详细数据表格（可折叠）
+    st.altair_chart(chart, use_conta
     with st.expander("📋 查看详细心跳数据列表"):
         display_df = df_heartbeats.copy()
-        display_df['time'] = display_
+        display_df['time'] = display_df['time'].dt.strftime("%Y-%m-%d %H:%M:%S")
+        display_df.rename(columns={'seq': '序号', 'time': '接收时间'}, inplace=True)
+        st.dataframe(display_df, use_container_width=True)
