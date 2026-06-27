@@ -659,7 +659,8 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
     )
     m.add_child(draw)
 
-    safe_offset = safe_radius / 111000.0    for i, obs in enumerate(obstacles_gcj):
+    safe_offset = safe_radius / 111000.0
+    for i, obs in enumerate(obstacles_gcj):
         poly = obs.get('polygon', [])
         if len(poly) < 3:
             continue
