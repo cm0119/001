@@ -207,12 +207,12 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
     # 修正：左右绕行方向互换
     # 左绕行应该从障碍物左侧绕过（逆时针方向），右绕行从右侧绕过（顺时针方向）
     # 但在实际地图上，我们需要根据起始方向判断
-    if side == 'right':
-        # 左绕行：垂直向量向左（逆时针旋转90度）
+    if side == 'left':
+        # 左绕行：垂直向量向左（顺时针旋转90度）
         perp_x = -uy
         perp_y = ux
     else:
-        # 右绕行：垂直向量向右（顺时针旋转90度）
+        # 右绕行：垂直向量向右（逆时针旋转90度）
         perp_x = uy
         perp_y = -ux
     
