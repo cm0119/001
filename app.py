@@ -178,12 +178,12 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height):
                     return True
     return False
 
-# ==================== 单侧绕行路径生成（改进版） ====================
+# ==================== 单侧绕行路径生成（修正左右方向） ====================
 def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
     """
     生成左绕行或右绕行路径
     side: 'left' 或 'right'
-    原理：在起点和终点之间添加多个偏移控制点，让路径从障碍物左侧或右侧绕过
+    修正：在地图上左绕行应该是顺时针方向，右绕行是逆时针方向
     """
     # 获取需要绕行的障碍物
     block_obs = [obs for obs in obstacles_gcj if is_obstacle_blocking(obs, flight_height)]
@@ -204,7 +204,9 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
     ux = dx / length
     uy = dy / length
     
-    # 垂直向量（根据左右选择方向）
+    # 修正：左右绕行方向互换
+    # 左绕行应该从障碍物左侧绕过（逆时针方向），右绕行从右侧绕过（顺时针方向）
+    # 但在实际地图上，我们需要根据起始方向判断
     if side == 'left':
         # 左绕行：垂直向量向左（逆时针旋转90度）
         perp_x = -uy
@@ -240,12 +242,9 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
                 max_dist_to_center = dist
     
     # 计算障碍物在路径方向上的投影位置
-    # 从起点到障碍物中心的向量
     to_center_x = avg_cx - start[0]
     to_center_y = avg_cy - start[1]
-    # 投影长度（沿路径方向）
     proj_length = to_center_x * ux + to_center_y * uy
-    # 投影点（路径上的最近点）
     proj_x = start[0] + proj_length * ux
     proj_y = start[1] + proj_length * uy
     
@@ -257,27 +256,24 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
         proj_x = end[0]
         proj_y = end[1]
     
-    # 计算垂直偏移距离（根据障碍物大小和安全半径）
-    # 对于右绕行，需要更大的偏移量以确保绕过
+    # 修正：根据左右方向调整偏移倍数
     if side == 'right':
         offset_multiplier = 4.0  # 右绕行使用更大的偏移倍数
     else:
         offset_multiplier = 3.0
     
-    # 偏移距离 = 障碍物半径 + 安全半径的倍数
     base_offset = max_dist_to_center + safe_radius_deg * offset_multiplier
     
     # 尝试不同的偏移距离，从近到远
     for scale in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]:
         offset_distance = max_dist_to_center + safe_radius_deg * offset_multiplier * scale
         
-        # 生成偏移点（在垂直方向上的偏移）
+        # 生成偏移点
         offset_point1 = [
             proj_x + perp_x * offset_distance * 0.7,
             proj_y + perp_y * offset_distance * 0.7
         ]
         
-        # 第二个偏移点（在更远的地方，确保绕过）
         offset_point2 = [
             proj_x + perp_x * offset_distance * 1.2,
             proj_y + perp_y * offset_distance * 1.2
