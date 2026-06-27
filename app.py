@@ -850,7 +850,7 @@ def main():
                 folium_static(m, width=600, height=400)
             with comm_col:
                 st.subheader("📡 通信链路拓扑与数据流")
-                topo_html = '''
+                topo_html = unterminated triple-quoted string literal
                 <div style="display:flex; justify-content:space-around; text-align:center; margin-top:10px;">
                     <div style="width:28%; padding:12px; background:#e3f2fd; border:2px solid #1976d2; border-radius:8px;">
                         <div style="font-weight:bold; font-size:16px; color:#1976d2;">GCS</div>
