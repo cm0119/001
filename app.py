@@ -2,7 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import folium_static, st_folium
 from folium import plugins
-import randomrt os
+import random os
 import time
 import math
 import json
