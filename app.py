@@ -2,8 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import folium_static, st_folium
 from folium import plugins
-import random
-import os
+import randomrt os
 import time
 import math
 import json
@@ -179,11 +178,12 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height):
                     return True
     return False
 
-# ==================== 单侧绕行路径生成【修复版】 ====================
+# ==================== 单侧绕行路径生成（简化版） ====================
 def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
     """
-    修复左右绕行向量逻辑 + 多级偏移碰撞校验
-    side: 'left' 前进方向左手绕行 / 'right' 前进方向右手绕行
+    生成左绕行或右绕行路径
+    side: 'left' 或 'right'
+    原理：在起点和终点之间添加一个偏移控制点，让路径从障碍物左侧或右侧绕过
     """
     # 获取需要绕行的障碍物
     block_obs = [obs for obs in obstacles_gcj if is_obstacle_blocking(obs, flight_height)]
@@ -193,24 +193,24 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
     # 安全半径转换为度数
     safe_radius_deg = safe_radius / 111000.0
     
-    # 计算起点到终点的航向向量
+    # 计算起点到终点的方向
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     length = math.hypot(dx, dy)
     if length < 1e-10:
         return None
     
-    # 单位航向向量 (lng:x, lat:y)
+    # 单位方向向量
     ux = dx / length
     uy = dy / length
     
-    # 【修复】标准地理平面垂直旋转向量，左右区分正确
+    # 垂直向量（根据左右选择方向）
     if side == 'left':
-        # 前进方向左侧：逆时针90度旋转向量
+        # 左绕行：垂直向量向左（逆时针旋转90度）
         perp_x = -uy
         perp_y = ux
     else:
-        # 前进方向右侧：顺时针90度旋转向量
+        # 右绕行：垂直向量向右（顺时针旋转90度）
         perp_x = uy
         perp_y = -ux
     
@@ -226,11 +226,12 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
     if not all_centers:
         return None
     
-    # 障碍物集群平均中心
+    # 计算所有障碍物的平均中心
     avg_cx = sum(c[0] for c in all_centers) / len(all_centers)
     avg_cy = sum(c[1] for c in all_centers) / len(all_centers)
     
-    # 障碍物集群外接半径
+    # 计算偏移距离（根据安全半径和障碍物大小调整）
+    # 获取最远障碍物的距离
     max_dist_to_center = 0
     for obs in block_obs:
         poly = obs["polygon"]
@@ -239,30 +240,51 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
             if dist > max_dist_to_center:
                 max_dist_to_center = dist
     
-    # 多级偏移系数：由近到远逐级测试，优先最小偏移
-    offset_scales = [2.5, 3, 4, 5, 6, 8, 10]
-    for scale in offset_scales:
+    # 偏移距离 = 障碍物半径 + 安全半径的倍数
+    offset_distance = max_dist_to_center + safe_radius_deg * 3
+    
+    # 生成偏移点
+    offset_point = [
+        avg_cx + perp_x * offset_distance,
+        avg_cy + perp_y * offset_distance
+    ]
+    
+    # 构建路径：起点 -> 偏移点 -> 终点
+    path = [start, offset_point, end]
+    
+    # 碰撞检测
+    collision = False
+    for i in range(len(path) - 1):
+        if is_path_blocked(path[i], path[i+1], obstacles_gcj, flight_height):
+            collision = True
+            break
+    
+    if not collision:
+        # 平滑路径
+        smoothed = catmull_rom_spline(path, num_points=8)
+        final_path = simplify_path_by_distance(smoothed)
+        return final_path
+    
+    # 如果失败，尝试更大的偏移距离
+    for scale in [4, 5, 6, 7, 8, 10]:
         offset_distance = max_dist_to_center + safe_radius_deg * scale
         offset_point = [
             avg_cx + perp_x * offset_distance,
             avg_cy + perp_y * offset_distance
         ]
-        temp_path = [start, offset_point, end]
+        path = [start, offset_point, end]
         
-        # 分段碰撞检测
-        hit_obstacle = False
-        for seg_idx in range(len(temp_path)-1):
-            p_seg_start = temp_path[seg_idx]
-            p_seg_end = temp_path[seg_idx+1]
-            if is_path_blocked(p_seg_start, p_seg_end, obstacles_gcj, flight_height):
-                hit_obstacle = True
+        collision = False
+        for i in range(len(path) - 1):
+            if is_path_blocked(path[i], path[i+1], obstacles_gcj, flight_height):
+                collision = True
                 break
-        if not hit_obstacle:
-            # 无碰撞，平滑抽稀后返回
-            smoothed = catmull_rom_spline(temp_path, num_points=8)
+        
+        if not collision:
+            smoothed = catmull_rom_spline(path, num_points=8)
             final_path = simplify_path_by_distance(smoothed)
             return final_path
-    # 所有偏移距离均碰撞，单侧绕行失败
+    
     return None
 
 # ==================== A*路径规划 ====================
@@ -437,7 +459,7 @@ def load_obstacles_from_cache():
     st.success(f"已从缓存加载 {len(st.session_state.obstacles_gcj)} 个障碍物")
     return True
 
-# ==================== 心跳包模拟器（原逻辑完全保留无修改） ====================
+# ==================== 心跳包模拟器 ====================
 class HeartbeatSimulator:
     def __init__(self, start_point_gcj):
         self.history = []
@@ -850,7 +872,7 @@ def main():
                 folium_static(m, width=600, height=400)
             with comm_col:
                 st.subheader("📡 通信链路拓扑与数据流")
-                topo_html = unterminated triple-quoted string literal
+                topo_html = '''
                 <div style="display:flex; justify-content:space-around; text-align:center; margin-top:10px;">
                     <div style="width:28%; padding:12px; background:#e3f2fd; border:2px solid #1976d2; border-radius:8px;">
                         <div style="font-weight:bold; font-size:16px; color:#1976d2;">GCS</div>
@@ -864,4 +886,54 @@ def main():
                         <div style="color:green; font-size:13px;">✅在线</div>
                     </div>
                     <div style="display:flex;align-items:center;">⬇️MAVLink⬆️</div>
-                    <div style="width:2
+                    <div style="width:28%; padding:12px; background:#fce4ec; border:2px solid #c2185b; border-radius:8px;">
+                        <div style="font-weight:bold; font-size:16px; color:#c2185b;">FCU</div>
+                        <div style="font-size:12px;">飞控<br/>PX4/ArduPilot</div>
+                        <div style="color:green; font-size:13px;">✅在线</div>
+                    </div>
+                </div>
+                <div style="margin-top:15px; padding:8px; background:#f5f5f5; border-radius:6px; font-size:13px;">
+                📊链路统计：GCS↔OBC:正常｜OBC↔FCU:正常｜延迟:~25ms｜丢包率:0.1%
+                </div>
+                '''
+                st.markdown(topo_html, unsafe_allow_html=True)
+
+                tab1, tab2 = st.tabs(["📤GCS→OBC→FCU下发日志", "📥FCU→OBC→GCS回传日志"])
+                with tab1:
+                    log_text1 = ""
+                    if len(st.session_state.gcs2fcu_log) == 0:
+                        log_text1 = "暂无航线下发日志\n点击重新规划生成日志"
+                    else:
+                        for line in st.session_state.gcs2fcu_log[-30:]:
+                            log_text1 += line + "\n"
+                    st.text_area("", log_text1, height=220)
+                with tab2:
+                    log_text2 = ""
+                    if len(st.session_state.fcu2gcs_log) == 0:
+                        log_text2 = "暂无飞控回传日志\n启动飞机飞行生成抵达日志"
+                    else:
+                        for line in st.session_state.fcu2gcs_log[-30:]:
+                            log_text2 += line + "\n"
+                    st.text_area("", log_text2, height=220)
+
+    # ==================== 障碍物管理 ====================
+    elif page == "🚧 障碍物管理":
+        st.header("🚧 障碍物管理")
+        st.info(f"当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
+        col1, col2 = st.columns([1, 1.5])
+        with col1:
+            for i, obs in enumerate(st.session_state.obstacles_gcj):
+                na, h, btn = st.columns([2,1,1])
+                na.write(f"🚧 {obs.get('name', f'障碍物{i+1}')}")
+                h.write(f"{obs.get('height',20)}m")
+                if btn.button("删除", key=f"del{i}"):
+                    st.session_state.obstacles_gcj.pop(i)
+                    st.rerun()
+            st.columns(2)[0].button("💾 保存到缓存", on_click=save_obstacles_to_cache)
+            st.columns(2)[1].button("📂 从缓存加载", on_click=load_obstacles_from_cache)
+            if st.button("🗑️ 全部清除"):
+                st.session_state.obstacles_gcj = []
+                st.rerun()
+
+if __name__ == "__main__":
+    main()
