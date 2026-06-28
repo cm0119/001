@@ -178,12 +178,11 @@ def is_path_blocked(p1, p2, obstacles_gcj, flight_height):
                     return True
     return False
 
-# ==================== 单侧绕行路径生成（修正左右方向） ====================
+# ==================== 单侧绕行路径生成（修正版） ====================
 def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_radius, side='left'):
     """
     生成左绕行或右绕行路径
     side: 'left' 或 'right'
-    修正：在地图上左绕行应该是顺时针方向，右绕行是逆时针方向
     """
     # 获取需要绕行的障碍物
     block_obs = [obs for obs in obstacles_gcj if is_obstacle_blocking(obs, flight_height)]
@@ -204,15 +203,13 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
     ux = dx / length
     uy = dy / length
     
-    # 修正：左右绕行方向互换
-    # 左绕行应该从障碍物左侧绕过（逆时针方向），右绕行从右侧绕过（顺时针方向）
-    # 但在实际地图上，我们需要根据起始方向判断
+    # 计算垂直向量（垂直于路径方向）
+    # 左侧：逆时针旋转90度 (-uy, ux)
+    # 右侧：顺时针旋转90度 (uy, -ux)
     if side == 'left':
-        # 左绕行：垂直向量向左（逆时针旋转90度）
         perp_x = -uy
         perp_y = ux
-    else:
-        # 右绕行：垂直向量向右（顺时针旋转90度）
+    else:  # right
         perp_x = uy
         perp_y = -ux
     
@@ -252,35 +249,46 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
     if proj_length < 0:
         proj_x = start[0]
         proj_y = start[1]
+        proj_length = 0
     elif proj_length > length:
         proj_x = end[0]
         proj_y = end[1]
+        proj_length = length
     
-    # 修正：根据左右方向调整偏移倍数
+    # 根据左右方向调整偏移倍数
     if side == 'right':
-        offset_multiplier = 4.0  # 右绕行使用更大的偏移倍数
-    else:
         offset_multiplier = 3.0
+    else:
+        offset_multiplier = 2.5
     
-    base_offset = max_dist_to_center + safe_radius_deg * offset_multiplier
-    
-    # 尝试不同的偏移距离，从近到远
-    for scale in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]:
+    # 计算偏移距离，尝试多个尺度
+    for scale in [1.0, 1.3, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0]:
         offset_distance = max_dist_to_center + safe_radius_deg * offset_multiplier * scale
         
-        # 生成偏移点
+        # 生成偏移点 - 使用三个控制点形成平滑弧线
+        # 第一个偏移点（靠近起点）
         offset_point1 = [
-            proj_x + perp_x * offset_distance * 0.7,
-            proj_y + perp_y * offset_distance * 0.7
+            proj_x + perp_x * offset_distance * 0.6,
+            proj_y + perp_y * offset_distance * 0.6
         ]
         
+        # 中间偏移点（最远点）
+        mid_ratio = 0.5
+        mid_x = start[0] + (end[0] - start[0]) * mid_ratio
+        mid_y = start[1] + (end[1] - start[1]) * mid_ratio
         offset_point2 = [
-            proj_x + perp_x * offset_distance * 1.2,
-            proj_y + perp_y * offset_distance * 1.2
+            mid_x + perp_x * offset_distance * 1.3,
+            mid_y + perp_y * offset_distance * 1.3
         ]
         
-        # 构建路径：起点 -> 偏移点1 -> 偏移点2 -> 终点
-        path = [start, offset_point1, offset_point2, end]
+        # 第三个偏移点（靠近终点）
+        offset_point3 = [
+            end[0] + perp_x * offset_distance * 0.6,
+            end[1] + perp_y * offset_distance * 0.6
+        ]
+        
+        # 构建路径：起点 -> 偏移点1 -> 偏移点2 -> 偏移点3 -> 终点
+        path = [start, offset_point1, offset_point2, offset_point3, end]
         
         # 碰撞检测
         collision = False
@@ -289,40 +297,60 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
                 collision = True
                 break
         
-        # 同时检查偏移点是否在障碍物内部
+        # 检查偏移点是否在障碍物内部
         if not collision:
             for obs in block_obs:
                 poly = obs["polygon"]
-                if point_in_polygon(offset_point1, poly) or point_in_polygon(offset_point2, poly):
-                    collision = True
+                for pt in [offset_point1, offset_point2, offset_point3]:
+                    if point_in_polygon(pt, poly):
+                        collision = True
+                        break
+                if collision:
                     break
         
         if not collision:
             # 平滑路径
-            smoothed = catmull_rom_spline(path, num_points=10)
-            final_path = simplify_path_by_distance(smoothed)
+            smoothed = catmull_rom_spline(path, num_points=15)
+            final_path = simplify_path_by_distance(smoothed, min_dist_deg=0.0002)
+            
             # 再次验证最终路径
             final_collision = False
             for i in range(len(final_path) - 1):
                 if is_path_blocked(final_path[i], final_path[i+1], obstacles_gcj, flight_height):
                     final_collision = True
                     break
+            
+            # 检查路径点是否在障碍物内部
             if not final_collision:
+                for obs in block_obs:
+                    poly = obs["polygon"]
+                    for pt in final_path:
+                        if point_in_polygon(pt, poly):
+                            final_collision = True
+                            break
+                    if final_collision:
+                        break
+            
+            if not final_collision and len(final_path) >= 2:
                 return final_path
     
-    # 如果简单的偏移失败，尝试使用三个偏移点
-    for scale in [2.0, 3.0, 4.0, 5.0]:
-        offset_distance = max_dist_to_center + safe_radius_deg * offset_multiplier * scale
+    # 如果偏移失败，尝试更激进的偏移
+    for scale in [3.0, 4.0, 5.0, 6.0, 8.0]:
+        offset_distance = max_dist_to_center + safe_radius_deg * offset_multiplier * scale * 1.5
         
-        # 生成三个偏移点，形成弧形路径
+        # 生成更远的偏移点
         offset_point1 = [
-            proj_x + perp_x * offset_distance * 0.5,
-            proj_y + perp_y * offset_distance * 0.5
+            start[0] + perp_x * offset_distance * 0.5,
+            start[1] + perp_y * offset_distance * 0.5
         ]
+        
+        mid_x = (start[0] + end[0]) / 2
+        mid_y = (start[1] + end[1]) / 2
         offset_point2 = [
-            (start[0] + end[0])/2 + perp_x * offset_distance * 1.5,
-            (start[1] + end[1])/2 + perp_y * offset_distance * 1.5
+            mid_x + perp_x * offset_distance * 1.8,
+            mid_y + perp_y * offset_distance * 1.8
         ]
+        
         offset_point3 = [
             end[0] + perp_x * offset_distance * 0.5,
             end[1] + perp_y * offset_distance * 0.5
@@ -330,6 +358,7 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
         
         path = [start, offset_point1, offset_point2, offset_point3, end]
         
+        # 碰撞检测
         collision = False
         for i in range(len(path) - 1):
             if is_path_blocked(path[i], path[i+1], obstacles_gcj, flight_height):
@@ -337,14 +366,16 @@ def generate_side_bypass_path(start, end, obstacles_gcj, flight_height, safe_rad
                 break
         
         if not collision:
-            smoothed = catmull_rom_spline(path, num_points=12)
-            final_path = simplify_path_by_distance(smoothed)
+            smoothed = catmull_rom_spline(path, num_points=20)
+            final_path = simplify_path_by_distance(smoothed, min_dist_deg=0.0002)
+            
             final_collision = False
             for i in range(len(final_path) - 1):
                 if is_path_blocked(final_path[i], final_path[i+1], obstacles_gcj, flight_height):
                     final_collision = True
                     break
-            if not final_collision:
+            
+            if not final_collision and len(final_path) >= 2:
                 return final_path
     
     return None
