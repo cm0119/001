@@ -16,6 +16,129 @@ import numpy as np
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="无人机地面站系统 - 平行偏移绕行", layout="wide")
 
+# ==================== JSON文件保存功能 ====================
+def get_data_dir():
+    """获取数据目录"""
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+    return data_dir
+
+def save_obstacles_to_json(filename=None):
+    """
+    保存障碍物到JSON文件
+    :param filename: 文件名，如果为None则自动生成
+    """
+    if 'obstacles_gcj' not in st.session_state or not st.session_state.obstacles_gcj:
+        st.warning("没有障碍物可保存")
+        return False
+    
+    if filename is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"obstacles_{timestamp}.json"
+    
+    # 确保文件名以.json结尾
+    if not filename.endswith('.json'):
+        filename += '.json'
+    
+    data = {
+        "version": "1.0",
+        "timestamp": datetime.now().isoformat(),
+        "obstacles": st.session_state.obstacles_gcj,
+        "count": len(st.session_state.obstacles_gcj)
+    }
+    
+    try:
+        data_dir = get_data_dir()
+        filepath = os.path.join(data_dir, filename)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        st.success(f"✅ 已保存 {len(st.session_state.obstacles_gcj)} 个障碍物到: {filename}")
+        return True
+    except Exception as e:
+        st.error(f"❌ 保存失败: {str(e)}")
+        return False
+
+def load_obstacles_from_json(filename):
+    """
+    从JSON文件加载障碍物
+    :param filename: 文件名
+    """
+    if not filename:
+        st.warning("请选择或输入文件名")
+        return False
+    
+    if not filename.endswith('.json'):
+        filename += '.json'
+    
+    try:
+        data_dir = get_data_dir()
+        filepath = os.path.join(data_dir, filename)
+        
+        if not os.path.exists(filepath):
+            st.error(f"❌ 文件不存在: {filename}")
+            return False
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        if 'obstacles' in data:
+            st.session_state.obstacles_gcj = data['obstacles']
+            st.success(f"✅ 已加载 {len(data['obstacles'])} 个障碍物")
+            
+            # 重新规划路径
+            if 'planned_path' in st.session_state and 'points_gcj' in st.session_state:
+                st.session_state.planned_path = create_avoidance_path(
+                    st.session_state.points_gcj['A'],
+                    st.session_state.points_gcj['B'],
+                    st.session_state.obstacles_gcj,
+                    st.session_state.flight_altitude,
+                    st.session_state.get('safe_radius', 5),
+                    st.session_state.get('selected_strategy', 'best')
+                )
+            return True
+        else:
+            st.error("❌ 数据格式错误：缺少'obstacles'字段")
+            return False
+    except Exception as e:
+        st.error(f"❌ 加载失败: {str(e)}")
+        return False
+
+def list_json_files():
+    """列出数据目录下的所有JSON文件"""
+    try:
+        data_dir = get_data_dir()
+        if not os.path.exists(data_dir):
+            return []
+        
+        files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
+        return sorted(files, reverse=True)  # 最新的在前
+    except Exception as e:
+        st.error(f"列出文件失败: {str(e)}")
+        return []
+
+def delete_json_file(filename):
+    """删除JSON文件"""
+    if not filename:
+        return False
+    
+    try:
+        data_dir = get_data_dir()
+        filepath = os.path.join(data_dir, filename)
+        
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            st.success(f"✅ 已删除: {filename}")
+            return True
+        else:
+            st.error(f"❌ 文件不存在: {filename}")
+            return False
+    except Exception as e:
+        st.error(f"❌ 删除失败: {str(e)}")
+        return False
+
 # ==================== 坐标 ====================
 SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
 DEFAULT_A_GCJ = [118.746956, 32.232945]
@@ -598,8 +721,7 @@ class HeartbeatSimulator:
                 self.progress = min(1.0, self.distance_traveled / self.total_distance)
             if self.path_index >= len(self.path)-1:
                 self.simulating = False
-                self.progress = 1.0
-                add_fcu_obc_gcs_log("FCU→OBC→GCS: MISSION_COMPLETE")
+                self.progress = 1.0                add_fcu_obc_gcs_log("FCU→OBC→GCS: MISSION_COMPLETE")
         else:
             self.simulating = False
             self.progress = 1.0
@@ -982,20 +1104,100 @@ def main():
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         st.info(f"当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
-        col1, col2 = st.columns([1, 1.5])
-        with col1:
-            for i, obs in enumerate(st.session_state.obstacles_gcj):
-                na, h, btn = st.columns([2,1,1])
-                na.write(f"🚧 {obs.get('name', f'障碍物{i+1}')}")
-                h.write(f"{obs.get('height',20)}m")
-                if btn.button("删除", key=f"del{i}"):
-                    st.session_state.obstacles_gcj.pop(i)
+        
+        # 创建标签页
+        tab1, tab2, tab3 = st.tabs(["📋 障碍物列表", "💾 保存/加载", "📂 文件管理"])
+        
+        with tab1:
+            col1, col2 = st.columns([1, 1.5])
+            with col1:
+                for i, obs in enumerate(st.session_state.obstacles_gcj):
+                    na, h, btn = st.columns([2, 1, 1])
+                    na.write(f"🚧 {obs.get('name', f'障碍物{i+1}')}")
+                    h.write(f"{obs.get('height',20)}m")
+                    if btn.button("删除", key=f"del{i}"):
+                        st.session_state.obstacles_gcj.pop(i)
+                        st.rerun()
+                
+                st.markdown("---")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("💾 保存到缓存", use_container_width=True):
+                        save_obstacles_to_cache()
+                with c2:
+                    if st.button("📂 从缓存加载", use_container_width=True):
+                        load_obstacles_from_cache()
+                        st.rerun()
+                
+                if st.button("🗑️ 全部清除", use_container_width=True):
+                    st.session_state.obstacles_gcj = []
                     st.rerun()
-            st.columns(2)[0].button("💾 保存到缓存", on_click=save_obstacles_to_cache)
-            st.columns(2)[1].button("📂 从缓存加载", on_click=load_obstacles_from_cache)
-            if st.button("🗑️ 全部清除"):
-                st.session_state.obstacles_gcj = []
-                st.rerun()
+        
+        with tab2:
+            st.subheader("💾 保存障碍物到JSON文件")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                save_filename = st.text_input(
+                    "文件名", 
+                    value=f"obstacles_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    key="save_json_filename"
+                )
+            with col2:
+                if st.button("💾 保存", use_container_width=True, type="primary"):
+                    save_obstacles_to_json(save_filename)
+            
+            st.markdown("---")
+            st.subheader("📂 从JSON文件加载障碍物")
+            
+            json_files = list_json_files()
+            if json_files:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    selected_file = st.selectbox("选择文件", json_files, key="load_json_select")
+                with col2:
+                    if st.button("📂 加载", use_container_width=True, type="primary"):
+                        load_obstacles_from_json(selected_file)
+                        st.rerun()
+            else:
+                st.info("📁 暂无JSON文件，请先保存障碍物")
+        
+        with tab3:
+            st.subheader("📂 文件管理")
+            
+            json_files = list_json_files()
+            if json_files:
+                st.write(f"共 {len(json_files)} 个JSON文件")
+                
+                # 显示文件列表
+                file_data = []
+                for filename in json_files:
+                    data_dir = get_data_dir()
+                    filepath = os.path.join(data_dir, filename)
+                    if os.path.exists(filepath):
+                        size = os.path.getsize(filepath)
+                        mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+                        file_data.append({
+                            "文件名": filename,
+                            "大小": f"{size/1024:.2f} KB",
+                            "修改时间": mtime.strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                
+                if file_data:
+                    df = pd.DataFrame(file_data)
+                    st.dataframe(df, use_container_width=True)
+                
+                # 删除文件
+                st.markdown("---")
+                st.subheader("🗑️ 删除文件")
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    delete_file = st.selectbox("选择要删除的文件", json_files, key="delete_json_select")
+                with col2:
+                    if st.button("🗑️ 删除", use_container_width=True, type="secondary"):
+                        if delete_json_file(delete_file):
+                            st.rerun()
+            else:
+                st.info("📁 暂无JSON文件")
 
 if __name__ == "__main__":
     main()
